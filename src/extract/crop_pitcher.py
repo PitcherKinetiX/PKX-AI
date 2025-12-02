@@ -18,11 +18,17 @@ class NumpyEncoder(json.JSONEncoder):
 
 
 class PitcherCropper:
-    def __init__(self, base_dir, crop_w=600, crop_h=900,
-                 score_thr=0.5, ratio_thr=1.5, device='cuda'):
-        self.BASE_DIR = base_dir
-        self.INPUT_DIR = os.path.join(base_dir, 'data', 'video_data')
-        self.OUTPUT_DIR = os.path.join(base_dir, 'data', 'cropped_videos')
+    def __init__(self,
+                 input_video_dir,
+                 output_video_dir,
+                 crop_w=900,
+                 crop_h=900,
+                 score_thr=0.5,
+                 ratio_thr=1.5,
+                 device='cuda'):
+
+        self.INPUT_DIR = input_video_dir
+        self.OUTPUT_DIR = output_video_dir
 
         self.CROP_WIDTH = crop_w
         self.CROP_HEIGHT = crop_h
@@ -168,12 +174,12 @@ class PitcherCropper:
     # main
     # -------------------------
     def process(self):
-        vids = []
-        for p in ['*.mp4', '*.MP4', '*.avi', '*.mov']:
-            vids += glob.glob(os.path.join(self.INPUT_DIR, p))
-        vids = list(set(vids))
+        videos = []
+        for ptn in ['*.mp4', '*.MP4', '*.avi', '*.mov']:
+            videos += glob.glob(os.path.join(self.INPUT_DIR, ptn))
+        videos = list(set(videos))
 
-        for vid in vids:
+        for vid in videos:
             name = os.path.basename(vid)
             print(f"[Processing] {name}")
 
@@ -183,10 +189,9 @@ class PitcherCropper:
             for i, out in enumerate(gen):
                 preds = out['predictions'][0]
                 people = preds if isinstance(preds, list) else preds.get('instances', [])
-                for p in people:
-                    p['frame_id'] = i
                 self.match_people(tracks, people)
 
+            # best track 찾기 (코드 동일)
             best_id, best_score = -1, -1
             for tid, info in tracks.items():
                 score = self.track_variance_score(tid, info['data'])
@@ -195,33 +200,25 @@ class PitcherCropper:
                     best_id = tid
 
             if best_id == -1:
-                print(f"[Warning] Could not find a suitable pitcher in {name}. Skipping.")
+                print(f"[Warning] No pitcher found in {name}")
                 continue
 
             track = tracks[best_id]
+            first_bbox = track['data'][0]['bbox']
+            bbox = first_bbox[0] if isinstance(first_bbox[0], (list, np.ndarray)) else first_bbox
 
-            # ------------------------------
-            # ★ 첫 프레임 bbox 기준 정사각형 bbox 고정 생성
-            # ------------------------------
-            first_bbox_raw = track['data'][0]['bbox']
-            first_bbox = first_bbox_raw[0] if isinstance(first_bbox_raw[0], (list, np.ndarray)) else first_bbox_raw
-
-            # 비디오 크기 필요
             cap = cv2.VideoCapture(vid)
-            frame_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            frame_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-            # [핵심] 수정된 make_square_bbox 함수 호출
-            fixed_bbox = self.make_square_bbox(first_bbox, frame_w, frame_h)
-            print(f"[Info] Fixed 1.5x BBox: {fixed_bbox}")
+            fixed_bbox = self.make_square_bbox(bbox, fw, fh)
+            print(f"[BBox] {fixed_bbox}")
 
-            # ------------------------------
-            # Crop 모든 프레임에 고정 적용
-            # ------------------------------
             fps = cap.get(cv2.CAP_PROP_FPS)
             out = cv2.VideoWriter(
                 os.path.join(self.OUTPUT_DIR, name),
-                cv2.VideoWriter_fourcc(*'mp4v'), fps,
+                cv2.VideoWriter_fourcc(*'mp4v'),
+                fps,
                 (self.CROP_WIDTH, self.CROP_HEIGHT)
             )
 
@@ -229,11 +226,10 @@ class PitcherCropper:
                 ret, frame = cap.read()
                 if not ret:
                     break
-
                 cropped = self.crop_frame(frame, fixed_bbox)
                 out.write(cropped)
 
             out.release()
             cap.release()
 
-        print("Finished crop processing.")
+        print("Cropping Complete.")
