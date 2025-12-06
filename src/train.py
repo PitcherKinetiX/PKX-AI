@@ -4,6 +4,9 @@ import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
 import os
+import joblib
+from sklearn.preprocessing import StandardScaler
+from torch.optim.lr_scheduler import ReduceLROnPlateau  # [핵심] 스케줄러 import
 
 
 # ==========================================
@@ -66,7 +69,7 @@ class LSTMDecoder(nn.Module):
 # 4. Full AE
 # ==========================================
 class LSTMAutoencoder(nn.Module):
-    def __init__(self, input_dim=13, hidden_dim=128, latent_dim=32, seq_len=30):
+    def __init__(self, input_dim=13, hidden_dim=128, latent_dim=32, seq_len=24):
         super().__init__()
         self.encoder = LSTMEncoder(input_dim, hidden_dim, latent_dim)
         self.decoder = LSTMDecoder(latent_dim, hidden_dim, input_dim, seq_len)
@@ -78,23 +81,38 @@ class LSTMAutoencoder(nn.Module):
 
 
 # ==========================================
-# 5. Train Function (save only final epoch)
+# 5. Train Function (with Scaler and Scheduler)
 # ==========================================
 def train_lstm_ae():
-    npz_path = r"C:\Users\Yul\PycharmProjects\PitcherKinetiX\data\train\processed\2d_data.npz"
+    # 경로 설정
+    base_dir = r"C:\Users\Yul\PycharmProjects\PitcherKinetiX"
+    npz_path = os.path.join(base_dir, r"data\train\processed\2d_data.npz")
+    model_save_dir = os.path.join(base_dir, "models")
+    os.makedirs(model_save_dir, exist_ok=True)
+
+    # 데이터 로드 및 스케일링 (이 부분은 이전과 동일)
     data = np.load(npz_path, allow_pickle=True)
-
     windows = data["windows"]
-    print("Loaded:", windows.shape)
 
+    print("[Preprocess] Applying StandardScaler...")
+    N, T, F = windows.shape
+    windows_flat = windows.reshape(-1, F)
+    scaler = StandardScaler()
+    windows_scaled_flat = scaler.fit_transform(windows_flat)
+
+    scaler_path = os.path.join(model_save_dir, "scaler.pkl")
+    joblib.dump(scaler, scaler_path)
+    print(f"Scaler saved to: {scaler_path}")
+
+    windows = windows_scaled_flat.reshape(N, T, F)
+    print("Scaled Data Shape:", windows.shape)
+
+    # 데이터 분할 및 로더 생성 (이 부분은 이전과 동일)
     num = len(windows)
     idx = np.random.permutation(num)
-
     train_end = int(num * 0.9)
-    train_idx, val_idx = idx[:train_end], idx[train_end:]
-
-    train_w = windows[train_idx]
-    val_w = windows[val_idx]
+    train_w = windows[idx[:train_end]]
+    val_w = windows[idx[train_end:]]
 
     train_loader = DataLoader(PitchWindowDataset(train_w), batch_size=64, shuffle=True)
     val_loader = DataLoader(PitchWindowDataset(val_w), batch_size=64)
@@ -102,15 +120,26 @@ def train_lstm_ae():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print("Using device:", device)
 
+    # 모델 초기화
+    seq_len = train_w.shape[1]
     input_dim = train_w.shape[-1]
-    model = LSTMAutoencoder(input_dim=input_dim).to(device)
+    model = LSTMAutoencoder(input_dim=input_dim, seq_len=seq_len).to(device)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=5e-4)
+    # 옵티마이저, 손실 함수 설정
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     criterion = nn.MSELoss()
 
-    epochs = 200
+    # [핵심 추가] Learning Rate Scheduler 설정
+    scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, verbose=True)
+
+    # Epochs 증가 (200 -> 300)
+    epochs = 300
+
     train_losses = []
     val_losses = []
+    best_val_loss = float('inf')
+
+    print(f"Starting Training for {epochs} epochs...")
 
     # -----------------------
     # Training Loop
@@ -147,37 +176,39 @@ def train_lstm_ae():
         avg_val_loss = total_val_loss / len(val_loader)
         val_losses.append(avg_val_loss)
 
-        print(f"Epoch {epoch+1}/{epochs} | Train: {avg_train_loss:.6f} | Val: {avg_val_loss:.6f}")
+        # [핵심] Scheduler 업데이트
+        scheduler.step(avg_val_loss)
+        current_lr = optimizer.param_groups[0]['lr']
+
+        # Best Model 저장
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            final_path = os.path.join(model_save_dir, "lstm_ae_final.pth")
+            torch.save(model.state_dict(), final_path)
+
+        if (epoch + 1) % 10 == 0 or current_lr != optimizer.param_groups[0]['lr']:
+            print(
+                f"Epoch {epoch + 1}/{epochs} | Train: {avg_train_loss:.6f} | Val: {avg_val_loss:.6f} | LR: {current_lr:.6f}")
 
     print("Training completed!")
+    print(f"Best Val Loss: {best_val_loss:.6f}")
 
     # -----------------------
-    # Save final model ONLY
+    # Save Loss History & Plot
     # -----------------------
-    final_path = "lstm_ae_final.pth"
-    torch.save(model.state_dict(), final_path)
-    print(f"Saved final model → {final_path}")
+    np.save(os.path.join(model_save_dir, "train_losses.npy"), np.array(train_losses))
+    np.save(os.path.join(model_save_dir, "val_losses.npy"), np.array(val_losses))
 
-    # -----------------------
-    # Save Loss History
-    # -----------------------
-    np.save("train_losses.npy", np.array(train_losses))
-    np.save("val_losses.npy", np.array(val_losses))
-    print("Saved train_losses.npy / val_losses.npy")
-
-    # -----------------------
-    # Plot loss curve
-    # -----------------------
     plt.figure(figsize=(10, 6))
     plt.plot(train_losses, label="Train Loss")
     plt.plot(val_losses, label="Val Loss")
     plt.xlabel("Epoch")
-    plt.ylabel("MSE")
-    plt.title("Training Loss Curve (LSTM-AE)")
+    plt.ylabel("MSE (Scaled)")
+    plt.title("Training Loss Curve (With Scheduler)")
     plt.grid(True)
     plt.legend()
     plt.tight_layout()
-    plt.savefig("loss_curve.png")
+    plt.savefig(os.path.join(model_save_dir, "loss_curve.png"))
     plt.show()
 
 

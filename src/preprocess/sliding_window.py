@@ -1,9 +1,8 @@
-# C:\Users\Yul\PycharmProjects\PitcherKinetiX\src\preprocess\sliding_window.py
-
 import numpy as np
 
+
 class SlidingWindowGenerator:
-    def __init__(self, window_size=30, stride=2):
+    def __init__(self, window_size=24, stride=2):
         self.window_size = window_size
         self.stride = stride
 
@@ -18,5 +17,8 @@ class SlidingWindowGenerator:
         for start in range(0, T - self.window_size + 1, self.stride):
             end = start + self.window_size
             windows.append(sequence[start:end])
+
+        if not windows:
+            return np.empty((0, self.window_size, D))
 
         return np.array(windows)

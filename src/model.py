@@ -1,2 +1,0 @@
-# LSTM-autoencoder model
-
