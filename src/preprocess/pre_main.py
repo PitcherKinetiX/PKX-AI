@@ -11,7 +11,7 @@ def run_preprocessing(
         json_dir,
         output_dir,
         kps_dir,
-        window_size=24,
+        window_size=32,
         stride=2,
         verbose=True):
     os.makedirs(output_dir, exist_ok=True)
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------
     # [설정] 여기서 'train' 또는 'val'을 선택하세요.
     # -------------------------------------------------------
-    MODE = "val"  # 'train' or 'val'
+    MODE = "train"  # 'train' or 'val'
 
     if MODE == "train":
         target_json_dir = config.JSON_2D_DIR

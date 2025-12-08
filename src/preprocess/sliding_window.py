@@ -2,7 +2,7 @@ import numpy as np
 
 
 class SlidingWindowGenerator:
-    def __init__(self, window_size=24, stride=2):
+    def __init__(self, window_size=32, stride=2):
         self.window_size = window_size
         self.stride = stride
 

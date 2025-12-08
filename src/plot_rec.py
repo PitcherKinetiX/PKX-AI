@@ -10,7 +10,7 @@ from train import LSTMAutoencoder
 # ---------------------------------------------------------
 # 1. Load trained AE model
 # ---------------------------------------------------------
-def load_model(model_path, input_dim=13, hidden_dim=128, latent_dim=32, seq_len=24, device="cuda"):
+def load_model(model_path, input_dim=13, hidden_dim=256, latent_dim=64, seq_len=32, device="cuda"):
     model = LSTMAutoencoder(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
@@ -129,9 +129,9 @@ def plot_tsne(latents, progress):
 if __name__ == "__main__":
     # 설정
     INPUT_DIM = 13
-    SEQ_LEN = 24
-    HIDDEN_DIM = 128
-    LATENT_DIM = 32
+    SEQ_LEN = 32
+    HIDDEN_DIM = 256
+    LATENT_DIM = 64
 
     # 경로 확인 (train.py에서 scaler가 저장된 경로여야 함)
     DATA_PATH = r"C:\Users\Yul\PycharmProjects\PitcherKinetiX\data\train\processed\2d_data.npz"

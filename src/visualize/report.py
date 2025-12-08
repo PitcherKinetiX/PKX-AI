@@ -1,131 +1,180 @@
 # report.py
 import numpy as np
 import os
-from cal_error import analyze_user_video
+import joblib
 import config
 
+from cal_user_error import cal_user_error
+from cal_gen_error import cal_gen_error
+from cal_med_error import cal_med_error
+
 FEATURE_LABELS = [
-    "L_elbow_angle",
-    "R_elbow_angle",
-    "L_shoulder_angle",
-    "R_shoulder_angle",
-    "L_hip_angle",
-    "R_hip_angle",
-    "L_knee_angle",
-    "R_knee_angle",
-    "knee_ext_vel",
-    "pelvis_rot_vel",
-    "trunk_rot_vel",
-    "elbow_ext_vel",
-    "shoulder_ir_vel",
+    "L_elbow_angle","R_elbow_angle",
+    "L_shoulder_angle","R_shoulder_angle",
+    "L_hip_angle","R_hip_angle",
+    "L_knee_angle","R_knee_angle",
+    "knee_ext_vel","pelvis_rot_vel",
+    "trunk_rot_vel","elbow_ext_vel","shoulder_ir_vel"
 ]
 
+VEL_LABELS = FEATURE_LABELS[8:]
 
-# ------------------------------------
-# Reconstruction Error Classification
-# ------------------------------------
-def classify_feature_error(err, mean, std):
-    if err < mean + 0.5 * std:
+
+def classify_error_level(value, mean, std):
+    if value < mean + 0.5 * std:
         return "정상"
-    elif err < mean + 1.0 * std:
+    elif value < mean + 1.0 * std:
         return "양호"
-    elif err < mean + 2.0 * std:
+    elif value < mean + 2.0 * std:
         return "주의"
     else:
         return "위험"
 
 
-# ------------------------------------
-# Medical Thresholds
-# ------------------------------------
-MEDICAL_THRESHOLDS = {
-    "knee_ext_vel": (300, 500, 700),
-    "pelvis_rot_vel": (400, 600, 900),
-    "trunk_rot_vel": (600, 900, 1200),
-    "elbow_ext_vel": (2000, 2400, 2700),
-    "shoulder_ir_vel": (7000, 8500, 10000),
-}
-
-MEDICAL_DESCRIPTIONS = {
-    "knee_ext_vel": "무릎 신전 속도가 과도하면 PFPS 및 전방 스트레스 증가와 연관됩니다.",
-    "pelvis_rot_vel": "골반 회전 타이밍이 어긋나면 허리 회전 부하가 증가합니다.",
-    "trunk_rot_vel": "상체 회전 속도가 과도하면 UCL 부하가 증가할 수 있습니다.",
-    "elbow_ext_vel": "팔꿈치 신전 속도가 과도할 경우 UCL strain이 증가합니다.",
-    "shoulder_ir_vel": "어깨 내회전 속도가 빠르면 SLAP 병변 위험이 증가할 수 있습니다.",
-}
+def assign_grade(score):
+    if score >= 90: return "A+"
+    elif score >= 80: return "A-"
+    elif score >= 70: return "B+"
+    elif score >= 60: return "B-"
+    elif score >= 50: return "C+"
+    elif score >= 40: return "C-"
+    elif score >= 30: return "D+"
+    elif score >= 20: return "D-"
+    else: return "F"
 
 
-def classify_medical_velocity(name, peak_deg_s):
-    normal, caution, danger = MEDICAL_THRESHOLDS[name]
-
-    if peak_deg_s < caution:
-        return "정상"
-    elif peak_deg_s < danger:
-        return "주의"
-    else:
-        return "위험"
-
-
-# ============================================
-# Report Generation
-# ============================================
+# ============================================================
+# REPORT MAIN
+# ============================================================
 def generate_report(file_id="v_1"):
-    result = analyze_user_video(file_id)
-    frame_err = result["frame_error"]           # (128,13)
 
-    # 1) feature 재구성 오차 (전체 평균)
-    feature_total_err = frame_err.mean(axis=0)
-
-    # user_stats 기반 scaling threshold
-    import joblib
+    # --------------------------------------------------------
+    # Load user baseline stats (mean, std)
+    # --------------------------------------------------------
     stats = joblib.load(os.path.join(config.FINE_TUNE_DIR, "user_stats.pkl"))
-    mean, std = stats["mean"], stats["std"]
+    mean_raw = stats["mean"]
+    std_raw = stats["std"]
 
-    # -------------------------
-    # 2) 실제 velocity peak 구하기
-    # -------------------------
-    # window 파일 불러오기
-    processed_path = os.path.join(config.VAL_PROCESSED_DIR, f"{file_id}_processed.npz")
-    npz = np.load(processed_path)
-    windows = npz["windows"]      # (num_windows, 24, 13)
+    # numpy array인지 확인
+    if np.isscalar(mean_raw):
+        mean = np.ones(13) * float(mean_raw)
+    else:
+        mean = np.array(mean_raw)
 
-    # velocity는 feature index 8~12
-    vel = windows[:, :, 8:13]     # (num_windows, 24, 5)
+    if np.isscalar(std_raw):
+        std = np.ones(13) * (float(std_raw) + 1e-6)
+    else:
+        std = np.array(std_raw) + 1e-6
 
-    # rad/frame → deg/s 변환
-    FPS = 128
-    vel_deg_s = vel * FPS * (180 / np.pi)   # (nwin, 24, 5)
+    # --------------------------------------------------------
+    # 1) USER ERROR ANALYSIS
+    # --------------------------------------------------------
+    user_res = cal_user_error(file_id)
+    feat_err = user_res["feature_error"]
+    crit_w = user_res["critical_window"]
+    crit_feat = user_res["critical_feature"]
+    crit_top3 = user_res["critical_top3_features"]
 
-    # peak velocity
-    vel_names = ["knee_ext_vel", "pelvis_rot_vel", "trunk_rot_vel",
-                 "elbow_ext_vel", "shoulder_ir_vel"]
+    feat_levels = [
+        classify_error_level(feat_err[i], mean[i], std[i])
+        for i in range(13)
+    ]
 
-    peak_vels = {
-        vel_names[i]: float(vel_deg_s[:, :, i].max())
-        for i in range(5)
-    }
+    # User Consistency Score
+    UserScore = float(np.clip(100 * (1 - feat_err.mean()), 0, 100))
 
-    # -------------------------
-    # 3) Report Text 구성
-    # -------------------------
+    # --------------------------------------------------------
+    # 2) GENERAL MODEL ANALYSIS
+    # --------------------------------------------------------
+    gen_res = cal_gen_error()
+    gen_feat_err = gen_res["feature_error"]
+    gen_worst_feat = gen_res["worst_feature_idx"]
+    latent_shift = gen_res["latent_shift_norm"]
+
+    GeneralScore = float(100 * np.exp(-latent_shift))
+    GeneralScore = np.clip(GeneralScore, 0, 100)
+
+    # --------------------------------------------------------
+    # 3) MEDICAL ANALYSIS
+    # --------------------------------------------------------
+    med_res = cal_med_error(file_id)
+
+    peak_values = med_res["peak_values"]
+    danger_ratios = med_res["danger_ratios"]
+    score_v = np.array(med_res["medical_scores"])  # velocity 기반
+
+    # timing score
+    timing_order = [
+        "knee_ext_vel","pelvis_rot_vel","trunk_rot_vel",
+        "elbow_ext_vel","shoulder_ir_vel"
+    ]
+
+    peak_idx = {VEL_LABELS[i]: peak_values[i] for i in range(5)}
+
+    score_t = 100
+    for a, b in zip(timing_order, timing_order[1:]):
+        if peak_idx[a] > peak_idx[b]:  # 타이밍 역전
+            score_t -= 20
+    score_t = max(0, score_t)
+
+    # 최종 medical score
+    MedicalScore = float(0.6 * score_v.mean() + 0.4 * score_t)
+
+    most_critical_med_feature = med_res["critical_med_name"]
+
+    # --------------------------------------------------------
+    # 4) FINAL SCORE
+    # --------------------------------------------------------
+    FinalScore = (
+        0.33 * UserScore +
+        0.33 * GeneralScore +
+        0.34 * MedicalScore
+    )
+    Grade = assign_grade(FinalScore)
+
+    # --------------------------------------------------------
+    # BUILD TEXT REPORT
+    # --------------------------------------------------------
     report = []
     report.append("=== Pitching Motion Analysis Report ===\n")
 
-    # ----- 13개 feature reconstruction error -----
-    report.append("[1] Feature Reconstruction Error Summary")
-    for i, err in enumerate(feature_total_err):
-        status = classify_feature_error(err, mean, std)
-        name = FEATURE_LABELS[i]
-        report.append(f"- {name}: {status} (err={err:.4f})")
+    # USER PART
+    report.append("[1] 사용자 투구 재구성 오차 분석 (User AE)")
+    for i in range(13):
+        report.append(
+            f"- {FEATURE_LABELS[i]}: {feat_levels[i]} (err={feat_err[i]:.4f})"
+        )
 
-    # ----- Medical kinetic chain evaluation -----
-    report.append("\n[2] Medical Evaluation (Peak Velocity Analysis)")
-    for name in vel_names:
-        peak = peak_vels[name]
-        med_status = classify_medical_velocity(name, peak)
-        desc = MEDICAL_DESCRIPTIONS[name]
-        report.append(f"- {name}: {med_status}  (peak={peak:.1f} deg/s)")
-        report.append(f"  설명: {desc}")
+    report.append(f"\n• Critical Window: {crit_w}")
+    report.append(f"• Critical Feature: {FEATURE_LABELS[crit_feat]}")
+    report.append("• Top3 Error Features:")
+    for idx in crit_top3:
+        report.append(f"   - {FEATURE_LABELS[idx]}")
+    report.append(f"→ User Consistency Score: {UserScore:.1f}\n")
+
+    # GEN PART
+    report.append("[2] General Model 비교")
+    for i, err in enumerate(gen_feat_err):
+        report.append(f"- {FEATURE_LABELS[i]}: err={err:.4f}")
+    report.append(f"• Worst General Feature: {FEATURE_LABELS[gen_worst_feat]}")
+    report.append(f"• Latent Shift Norm: {latent_shift:.4f}")
+    report.append(f"→ General Similarity Score: {GeneralScore:.1f}\n")
+
+    # MED PART
+    report.append("[3] 의학적 투구 메커니즘 분석")
+    for i, name in enumerate(VEL_LABELS):
+        report.append(
+            f"- {name}: peak={peak_values[i]:.1f}, "
+            f"ratio={danger_ratios[i]:.2f}, score={score_v[i]}"
+        )
+    report.append(f"• Timing Score: {score_t}")
+    report.append(f"• Most Critical Medical Feature: {most_critical_med_feature}")
+    report.append(f"→ Medical Safety Score: {MedicalScore:.1f}\n")
+
+    # FINAL
+    report.append("[4] 최종 평가")
+    report.append(f"- Final Score: {FinalScore:.1f} / 100")
+    report.append(f"- Grade: {Grade}")
 
     return "\n".join(report)
 
