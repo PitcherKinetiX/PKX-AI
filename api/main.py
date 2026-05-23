@@ -8,9 +8,15 @@ sys.path.insert(0, os.path.join(_project_root, "src", "extract"))
 sys.path.insert(0, os.path.join(_project_root, "src", "preprocess"))
 sys.path.insert(0, _project_root)
 
-from fastapi import FastAPI, HTTPException
+import logging
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from api.schemas import AnalyzeRequest, AnalyzeResponse
 import config
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
 GCS_BUCKET = os.environ.get("GCS_BUCKET_NAME", "pitcherkinetix1")
 
@@ -19,6 +25,12 @@ app = FastAPI(
     description="투구 동작 분석 AI API - 13개 생체역학 특징 전체 반환",
     version="1.0.0",
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    log.error("422 Validation error | body: %s | errors: %s", await request.body(), exc.errors())
+    return JSONResponse(status_code=422, content={"detail": exc.errors()})
 
 
 def _download_video(file_id_path: str, video_url: str | None, local_path: str):
