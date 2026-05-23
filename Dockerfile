@@ -27,12 +27,6 @@ RUN mim install "mmpose>=1.0.0"
 
 COPY . .
 
-# 모델 가중치 사전 다운로드 (빌드 시 CPU 모드, 런타임엔 GPU 자동 사용)
-RUN python -c "\
-from mmpose.apis import MMPoseInferencer; \
-MMPoseInferencer(pose2d='rtmpose-l', det_model='rtmdet-m', device='cpu'); \
-print('Model weights downloaded.')"
-
 EXPOSE 8000
 
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
