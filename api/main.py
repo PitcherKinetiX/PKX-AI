@@ -20,8 +20,11 @@ app = FastAPI(
 def analyze(request: AnalyzeRequest):
     from report import generate_report_json
 
+    # Strip S3 path prefix (e.g. "videos/4/foo.mp4" → "foo.mp4")
+    file_id = os.path.basename(request.fileId)
+
     try:
-        result = generate_report_json(file_id=request.fileId)
+        result = generate_report_json(file_id=file_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=f"분석 데이터를 찾을 수 없습니다: {e}")
     except Exception as e:
