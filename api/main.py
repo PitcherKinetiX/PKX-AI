@@ -21,11 +21,14 @@ app = FastAPI(
 )
 
 
-def _download_from_gcs(object_path: str, local_path: str):
-    from google.cloud import storage
-    client = storage.Client()
-    blob = client.bucket(GCS_BUCKET).blob(object_path)
-    blob.download_to_filename(local_path)
+def _download_video(file_id_path: str, video_url: str | None, local_path: str):
+    if video_url:
+        import urllib.request
+        urllib.request.urlretrieve(video_url, local_path)
+    else:
+        from google.cloud import storage
+        client = storage.Client()
+        client.bucket(GCS_BUCKET).blob(file_id_path).download_to_filename(local_path)
 
 
 def _run_pipeline(video_dir: str):
@@ -64,7 +67,7 @@ def analyze(request: AnalyzeRequest):
         with tempfile.TemporaryDirectory() as tmpdir:
             local_video = os.path.join(tmpdir, video_filename)
             try:
-                _download_from_gcs(request.fileId, local_video)
+                _download_video(request.fileId, request.videoUrl, local_video)
             except Exception as e:
                 raise HTTPException(status_code=500, detail=f"GCS 다운로드 실패: {e}")
             try:

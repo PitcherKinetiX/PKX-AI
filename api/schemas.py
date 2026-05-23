@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 
 class AnalyzeRequest(BaseModel):
@@ -6,6 +7,7 @@ class AnalyzeRequest(BaseModel):
     userId: int
     analysisId: int
     modelType: str = "GENERAL"
+    videoUrl: Optional[str] = None  # GCS Signed URL (외부 서버용)
 
 
 class FeatureDetail(BaseModel):
