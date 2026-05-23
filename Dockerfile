@@ -20,10 +20,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # MMPose 스택 설치
 RUN pip install --no-cache-dir openmim
-RUN mim install mmengine
-RUN mim install "mmcv>=2.0.0"
-RUN mim install "mmdet>=3.0.0"
-RUN mim install "mmpose>=1.0.0"
+RUN mim install "mmengine==0.10.4"
+RUN mim install "mmcv==2.2.0"
+RUN mim install "mmdet==3.3.0"
+RUN mim install "mmpose==1.3.2"
+
+# mim install upgrades numpy to 2.x; force back to 1.x for PyTorch 2.2 compatibility
+RUN pip install --no-cache-dir --force-reinstall "numpy==1.26.4"
+# recompile sklearn from source against the pinned numpy to avoid ABI mismatch
+RUN pip install --no-cache-dir --force-reinstall --no-binary scikit-learn "scikit-learn==1.3.2"
 
 COPY . .
 
