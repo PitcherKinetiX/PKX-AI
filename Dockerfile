@@ -1,8 +1,8 @@
-FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-runtime
+FROM pytorch/pytorch:2.2.0-cuda12.1-cudnn8-devel
 
 WORKDIR /app
 
-# 시스템 패키지 (OpenCV + mmcv 컴파일용)
+# 시스템 패키지 (OpenCV + mmcv 소스 컴파일용)
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     libgomp1 \
     git \
     build-essential \
+    ninja-build \
     && rm -rf /var/lib/apt/lists/*
 
 # PyTorch는 베이스 이미지에 포함 (CUDA 12.1 + cuDNN 8)
@@ -19,9 +20,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # MMPose 스택 설치
-RUN pip install --no-cache-dir openmim
+RUN pip install --no-cache-dir openmim ninja
 RUN mim install "mmengine==0.10.4"
-RUN pip install --no-cache-dir mmcv==2.2.0 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.2.0/index.html
+
+# mmcv 소스 직접 컴파일 — CUDA ops 100% 보장 (ninja로 병렬 컴파일)
+RUN git clone -b v2.2.0 --depth 1 https://github.com/open-mmlab/mmcv.git /tmp/mmcv && \
+    cd /tmp/mmcv && \
+    FORCE_CUDA=1 pip install --no-cache-dir -v . && \
+    rm -rf /tmp/mmcv
+
 RUN mim install "mmdet==3.3.0"
 RUN mim install "mmpose==1.3.2"
 
