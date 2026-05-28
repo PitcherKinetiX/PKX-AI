@@ -21,7 +21,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 # MMPose 스택 설치
 RUN pip install --no-cache-dir openmim
 RUN mim install "mmengine==0.10.4"
-RUN mim install "mmcv==2.2.0"
+RUN pip install --no-cache-dir mmcv==2.2.0 -f https://download.openmmlab.com/mmcv/dist/cu121/torch2.2.0/index.html
 RUN mim install "mmdet==3.3.0"
 RUN mim install "mmpose==1.3.2"
 

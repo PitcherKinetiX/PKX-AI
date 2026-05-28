@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(_project_root, "src", "preprocess"))
 sys.path.insert(0, _project_root)
 
 import logging
+import traceback
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -85,6 +86,7 @@ def analyze(request: AnalyzeRequest):
             try:
                 _run_pipeline(tmpdir)
             except Exception as e:
+                log.error("Pipeline failed:\n%s", traceback.format_exc())
                 raise HTTPException(status_code=500, detail=f"전처리 파이프라인 실패: {e}")
 
     try:
