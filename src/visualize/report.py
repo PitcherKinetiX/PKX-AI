@@ -109,11 +109,12 @@ def generate_report(file_id="v_1"):
         "elbow_ext_vel","shoulder_ir_vel"
     ]
 
-    peak_idx = {VEL_LABELS[i]: peak_values[i] for i in range(5)}
+    # peak_window_indices: 각 특징의 피크가 발생한 윈도우 인덱스 (속도값 아님)
+    peak_win_idx = {VEL_LABELS[i]: int(med_res["peak_window_indices"][i]) for i in range(5)}
 
     score_t = 100
     for a, b in zip(timing_order, timing_order[1:]):
-        if peak_idx[a] > peak_idx[b]:  # 타이밍 역전
+        if peak_win_idx[a] > peak_win_idx[b]:  # 타이밍 역전 (a가 b보다 늦게 피크)
             score_t -= 20
     score_t = max(0, score_t)
 
@@ -240,11 +241,11 @@ def generate_report_json(file_id="v_1") -> dict:
         "knee_ext_vel", "pelvis_rot_vel", "trunk_rot_vel",
         "elbow_ext_vel", "shoulder_ir_vel"
     ]
-    peak_idx = {VEL_LABELS[i]: peak_values[i] for i in range(5)}
+    peak_win_idx = {VEL_LABELS[i]: int(med_res["peak_window_indices"][i]) for i in range(5)}
 
     score_t = 100
     for a, b in zip(timing_order, timing_order[1:]):
-        if peak_idx[a] > peak_idx[b]:
+        if peak_win_idx[a] > peak_win_idx[b]:
             score_t -= 20
     score_t = max(0, score_t)
 

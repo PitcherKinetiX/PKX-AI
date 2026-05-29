@@ -31,7 +31,8 @@ def cal_med_error(file_id="v_1"):
     window_peak = vel_deg_s.max(axis=1)      # (num_windows, 5)
 
     # overall peak per feature
-    peak_values = window_peak.max(axis=0)    # (5,)
+    peak_values = window_peak.max(axis=0)      # (5,) — velocity magnitudes
+    peak_window_indices = window_peak.argmax(axis=0)  # (5,) — which window each peak occurs in
 
     # ----------------------
     # danger ratios (peak / danger_threshold)
@@ -88,4 +89,5 @@ def cal_med_error(file_id="v_1"):
 
         "medical_scores": medical_scores,
         "medical_overall_score": medical_overall_score,
+        "peak_window_indices": peak_window_indices,
     }
