@@ -10,10 +10,18 @@ sys.path.insert(0, _project_root)
 
 import logging
 import traceback
+import uuid
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from api.schemas import AnalyzeRequest, AnalyzeResponse
+from api.schemas import (
+    AnalyzeRequest,
+    AnalyzeResponse,
+    AnalyzeStartResponse,
+    AnalyzeStatusResponse,
+)
 import config
 
 logging.basicConfig(level=logging.INFO)
@@ -67,8 +75,8 @@ def _run_pipeline(video_dir: str):
     )
 
 
-@app.post("/api/analyze", response_model=AnalyzeResponse)
-def analyze(request: AnalyzeRequest):
+def _analyze_sync(request: AnalyzeRequest):
+    """전체 분석 파이프라인을 동기로 실행하고 리포트(dict)를 반환."""
     from report import generate_report_json
 
     # "videos/4/1779545132787_f53fceea_test.mp4" → "1779545132787_f53fceea_test"
@@ -90,13 +98,73 @@ def analyze(request: AnalyzeRequest):
                 raise HTTPException(status_code=500, detail=f"전처리 파이프라인 실패: {e}")
 
     try:
-        result = generate_report_json(file_id=file_id)
+        return generate_report_json(file_id=file_id)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=f"분석 데이터를 찾을 수 없습니다: {e}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"분석 중 오류 발생: {e}")
 
-    return result
+
+# ── 비동기 잡 관리 (Cloudflare 100초 제한 회피) ──────────────────────────
+# GPU 1개라 max_workers=1 로 직렬 처리 (동시 실행 OOM도 예방)
+_executor = ThreadPoolExecutor(max_workers=1)
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+
+
+def _set_job(job_id: str, **fields):
+    with _jobs_lock:
+        _jobs.setdefault(job_id, {}).update(fields)
+
+
+def _get_job(job_id: str):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+        return dict(job) if job is not None else None
+
+
+def _run_job(job_id: str, request: AnalyzeRequest):
+    _set_job(job_id, status="RUNNING")
+    try:
+        result = _analyze_sync(request)
+        _set_job(job_id, status="DONE", result=result)
+        log.info("Analysis job %s DONE (analysisId=%s)", job_id, request.analysisId)
+    except HTTPException as e:
+        _set_job(job_id, status="FAILED", error=str(e.detail))
+        log.error("Analysis job %s FAILED (analysisId=%s): %s", job_id, request.analysisId, e.detail)
+    except Exception as e:  # noqa: BLE001
+        log.error("Analysis job %s crashed:\n%s", job_id, traceback.format_exc())
+        _set_job(job_id, status="FAILED", error=str(e))
+
+
+@app.post("/api/analyze/start", response_model=AnalyzeStartResponse)
+def analyze_start(request: AnalyzeRequest):
+    """분석을 백그라운드로 시작하고 jobId를 즉시 반환 (짧은 응답 → Cloudflare 524 회피)."""
+    job_id = str(uuid.uuid4())
+    _set_job(job_id, status="PENDING", result=None, error=None)
+    _executor.submit(_run_job, job_id, request)
+    log.info("Analysis job %s queued (analysisId=%s)", job_id, request.analysisId)
+    return AnalyzeStartResponse(jobId=job_id, status="PENDING")
+
+
+@app.get("/api/analyze/status/{job_id}", response_model=AnalyzeStatusResponse)
+def analyze_status(job_id: str):
+    """잡 상태/결과 조회. 백엔드가 DONE 될 때까지 폴링."""
+    job = _get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return AnalyzeStatusResponse(
+        jobId=job_id,
+        status=job["status"],
+        result=job.get("result"),
+        error=job.get("error"),
+    )
+
+
+# 기존 동기 엔드포인트 — 하위호환용 유지 (백엔드 전환·검증 후 제거 가능)
+@app.post("/api/analyze", response_model=AnalyzeResponse)
+def analyze(request: AnalyzeRequest):
+    return _analyze_sync(request)
 
 
 @app.get("/health")

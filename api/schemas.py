@@ -55,3 +55,15 @@ class AnalyzeResponse(BaseModel):
     velocityAnalysis: list[VelocityDetail]  # 5개
     criticalAreas: CriticalAreas
     generalModel: GeneralModel
+
+
+class AnalyzeStartResponse(BaseModel):
+    jobId: str
+    status: str                             # 항상 "PENDING"
+
+
+class AnalyzeStatusResponse(BaseModel):
+    jobId: str
+    status: str                             # PENDING | RUNNING | DONE | FAILED
+    result: Optional[AnalyzeResponse] = None
+    error: Optional[str] = None
