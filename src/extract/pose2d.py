@@ -3,6 +3,7 @@ import glob
 import json
 import numpy as np
 from mmpose.apis import MMPoseInferencer
+from pose_weights import build_pose_inferencer_kwargs
 
 
 class NumpyEncoder(json.JSONEncoder):
@@ -32,12 +33,8 @@ class Pose2DInferencer:
 
         print("[INFO] Init Pose2DInferencer (Simple Best-Score Mode)")
 
-        # 시각화가 잘 나온다면 이 설정은 이미 검증된 것임
-        self.inferencer = MMPoseInferencer(
-            pose2d='rtmpose-l',
-            det_model='rtmdet-m',
-            device=device
-        )
+        # 로컬 가중치가 있으면 그것을 사용(오프라인), 없으면 별칭 온라인 폴백
+        self.inferencer = MMPoseInferencer(**build_pose_inferencer_kwargs(device))
 
     def process_2d_extraction(self):
         video_files = []

@@ -4,6 +4,7 @@ import json
 import cv2
 import numpy as np
 from mmpose.apis import MMPoseInferencer
+from pose_weights import build_pose_inferencer_kwargs
 
 
 class PitcherCropper:
@@ -26,11 +27,7 @@ class PitcherCropper:
 
         os.makedirs(self.OUTPUT_DIR, exist_ok=True)
 
-        self.inferencer = MMPoseInferencer(
-            pose2d='rtmpose-l',
-            pose3d=None,
-            device=device
-        )
+        self.inferencer = MMPoseInferencer(**build_pose_inferencer_kwargs(device))
 
     def match_people(self, tracks, current_people):
         valid_people = [
