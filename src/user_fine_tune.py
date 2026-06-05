@@ -9,9 +9,9 @@ import matplotlib.pyplot as plt
 from train import LSTMAutoencoder, PitchWindowDataset
 
 
-# 위에서 정의한 클래스들이 필요함 (LSTMAutoencoder, PitchWindowDataset 등)
-# 실제 파일 분리 시에는 import 해서 쓰면 됨.
-
+# ---------------------------------------------------------
+# Fine-tuning Function
+# ---------------------------------------------------------
 def fine_tune_and_get_threshold(user_video_path_list):
     """
     args:
@@ -25,6 +25,9 @@ def fine_tune_and_get_threshold(user_video_path_list):
     scaler_path = config.SCALER_DIR
     save_dir = config.FINE_TUNE_DIR
 
+    # 저장 경로 생성
+    os.makedirs(save_dir, exist_ok=True)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Device: {device}")
 
@@ -33,17 +36,15 @@ def fine_tune_and_get_threshold(user_video_path_list):
     print("Pre-trained Scaler loaded.")
 
     # ==========================================
-    # 2. 사용자 데이터 전처리
+    # 2. 사용자 데이터 전처리 (+ Clipping 추가)
     # ==========================================
-    # 여기서는 예시로 로컬 경로의 npz를 로드한다고 가정
     # 실제로는 user_video_path_list에 있는 데이터를 읽어서 windows로 만드는 과정 필요
     # 예시: user_data.npz 가 있다고 가정
     user_data_path = os.path.join(config.VAL_PROCESSED_DIR, "2d_data.npz")
 
     if not os.path.exists(user_data_path):
         print("사용자 데이터 경로를 확인해주세요. 임시 랜덤 데이터로 진행합니다.")
-        # (테스트용) 임시 데이터 생성
-        dummy_windows = np.random.randn(50, 24, 13)
+        dummy_windows = np.random.randn(50, 32, 13)  # Seq_Len 32로 가정
         windows = dummy_windows
     else:
         data = np.load(user_data_path, allow_pickle=True)
@@ -57,6 +58,15 @@ def fine_tune_and_get_threshold(user_video_path_list):
     windows_scaled_flat = scaler.transform(windows_flat)  # transform only!
     user_windows = windows_scaled_flat.reshape(N, T, F)
 
+    # -----------------------------------------------------------
+    # [수정됨] Clipping 적용 (학습 코드와 통일)
+    # 설명: 사용자 데이터에도 Phase Wrapping 등으로 인한 이상치가 있을 수 있으므로
+    #       학습 때와 똑같이 -5 ~ 5 범위로 잘라줍니다.
+    # -----------------------------------------------------------
+    print("[Preprocess] Applying Clipping to remove extreme outliers...")
+    user_windows = np.clip(user_windows, -5, 5)
+    print(f"Clipping done. Data Range: [{np.min(user_windows):.2f}, {np.max(user_windows):.2f}]")
+
     # DataLoader
     # 데이터가 적으므로 배치 사이즈는 작게 (예: 4~8)
     user_loader = DataLoader(PitchWindowDataset(user_windows), batch_size=4, shuffle=True)
@@ -64,7 +74,10 @@ def fine_tune_and_get_threshold(user_video_path_list):
     # ==========================================
     # 3. 모델 로드 및 Fine-tuning 설정
     # ==========================================
-    model = LSTMAutoencoder(input_dim=F, seq_len=T).to(device)
+    # Hidden dim, latent dim 등은 학습시켰던 모델과 동일해야 함
+    model = LSTMAutoencoder(input_dim=F, hidden_dim=256, latent_dim=64, seq_len=T).to(device)
+
+    # 학습된 가중치 로드
     model.load_state_dict(torch.load(model_path, map_location=device))
     print("Base Model loaded.")
 
@@ -73,8 +86,7 @@ def fine_tune_and_get_threshold(user_video_path_list):
     optimizer = torch.optim.Adam(model.parameters(), lr=ft_lr)
     criterion = nn.MSELoss()
 
-    # Epochs: 데이터가 적으므로 너무 많이 돌리면 과적합(Overfitting)됨.
-    # 5개 영상 기준 30~50 에폭 정도면 충분할 수 있음. Loss 떨어지는 것 보고 조절.
+    # Epochs: 데이터 양에 따라 조절 (소량 데이터 기준 30~50)
     ft_epochs = 50
 
     print(">>> Start Fine-tuning for User...")
@@ -92,6 +104,7 @@ def fine_tune_and_get_threshold(user_video_path_list):
 
             optimizer.zero_grad()
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # Gradient Clipping도 안전장치로 추천
             optimizer.step()
 
             total_loss += loss.item()
@@ -115,7 +128,7 @@ def fine_tune_and_get_threshold(user_video_path_list):
     reconstruction_errors = []
 
     with torch.no_grad():
-        # 전체 사용자 데이터에 대해 오차 계산 (Batch 없이 전체 통과 혹은 DataLoader 사용)
+        # 전체 사용자 데이터에 대해 오차 계산
         user_tensor = torch.tensor(user_windows, dtype=torch.float32).to(device)
         recon = model(user_tensor)
 
@@ -125,15 +138,10 @@ def fine_tune_and_get_threshold(user_video_path_list):
         reconstruction_errors = loss_per_sample.cpu().numpy()
 
     # Threshold 설정 로직
-    # 방법 A: 평균 + 2 * 표준편차 (약 95% 신뢰구간)
-    # 방법 B: 평균 + 3 * 표준편차 (약 99% 신뢰구간 - 더 보수적)
-    # 방법 C: 최대값 (사용자 정상 데이터 중 가장 못 한 것보다 못하면 이상치) -> 이건 노이즈에 취약함
-
     mean_error = np.mean(reconstruction_errors)
     std_error = np.std(reconstruction_errors)
 
-    # 젬민이의 선택: 이상치 탐지를 얼마나 엄격하게 할 것인가?
-    # 투구폼은 조금만 달라도 이상하니까 2 sigma 추천. 너무 예민하면 3 sigma로 변경.
+    # 2 Sigma (95%) 적용
     threshold = mean_error + 2 * std_error
 
     print(f"User Normal Loss Mean: {mean_error:.6f}")
@@ -151,7 +159,7 @@ def fine_tune_and_get_threshold(user_video_path_list):
     # 분포 시각화
     plt.figure(figsize=(8, 5))
     plt.hist(reconstruction_errors, bins=20, alpha=0.7, label="User Normal Errors")
-    plt.axvline(threshold, color='r', linestyle='--', label="Threshold")
+    plt.axvline(threshold, color='r', linestyle='--', label=f"Threshold ({threshold:.4f})")
     plt.title("Reconstruction Error Distribution (Fine-tuned)")
     plt.xlabel("MSE Loss")
     plt.legend()

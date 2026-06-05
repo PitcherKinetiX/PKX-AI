@@ -50,18 +50,28 @@ class LSTMDecoder(nn.Module):
     def __init__(self, latent_dim, hidden_dim, output_dim, seq_len, num_layers=1):
         super().__init__()
         self.seq_len = seq_len
+        self.output_dim = output_dim
         self.init_linear = nn.Linear(latent_dim, hidden_dim)
-        self.lstm = nn.LSTM(hidden_dim, hidden_dim, num_layers=num_layers, batch_first=True)
+        # 입력은 이전 스텝의 출력 프레임(output_dim) → autoregressive
+        self.lstm = nn.LSTM(output_dim, hidden_dim, num_layers=num_layers, batch_first=True)
         self.output_layer = nn.Linear(hidden_dim, output_dim)
 
     def forward(self, z):
-        h = torch.relu(self.init_linear(z)).unsqueeze(1)
+        batch = z.size(0)
+
+        # latent로 초기 hidden state 구성 (cell state는 0으로 시작)
+        h0 = torch.tanh(self.init_linear(z)).unsqueeze(0)  # (1, B, H)
+        c0 = torch.zeros_like(h0)
+        hidden = (h0, c0)
+
+        # 첫 입력 프레임 (zero start token)
+        frm = torch.zeros(batch, 1, self.output_dim, device=z.device)
+
         outputs = []
         for _ in range(self.seq_len):
-            out, _ = self.lstm(h)
-            frm = self.output_layer(out)
+            out, hidden = self.lstm(frm, hidden)  # hidden state를 계속 이어줌
+            frm = self.output_layer(out)  # 이전 출력을 다음 입력으로
             outputs.append(frm)
-            h = out
         return torch.cat(outputs, dim=1)
 
 
@@ -81,13 +91,36 @@ class LSTMAutoencoder(nn.Module):
 
 
 # ==========================================
+# 4-1. Loss: Time-weighted MSE + Velocity Loss
+# ==========================================
+def reconstruction_loss(recon, target, alpha=0.5):
+    """
+    - 시간 가중: 프레임 간 변화량(속도)이 큰 구간일수록 가중치 ↑
+      (빠른 후반부 동작을 더 강하게 학습)
+    - 속도 손실: 값뿐 아니라 1차 차분(변화율)도 맞추도록 강제
+    """
+    # 1) Time-weighted MSE
+    diff = torch.zeros_like(target)
+    diff[:, 1:, :] = torch.abs(target[:, 1:, :] - target[:, :-1, :])
+    weight = 1.0 + diff  # 변화 큰 구간 = 가중치 큼
+    mse = ((recon - target) ** 2 * weight).mean()
+
+    # 2) Velocity (1차 차분) 손실
+    v_recon = recon[:, 1:, :] - recon[:, :-1, :]
+    v_target = target[:, 1:, :] - target[:, :-1, :]
+    vel_loss = ((v_recon - v_target) ** 2).mean()
+
+    return mse + alpha * vel_loss
+
+
+# ==========================================
 # 5. Train Function (Scaling & Training)
 # ==========================================
 def train_lstm_ae():
     # -----------------------------------------------------------
     # [설정] 경로 및 하이퍼파라미터
     # -----------------------------------------------------------
-    base_dir = r"C:\Users\Yul\PycharmProjects\PitcherKinetiX"
+    base_dir = r"C:\Users\RhoYul\PycharmProjects\PitcherKinetiX"
     npz_path = os.path.join(base_dir, r"data\train\processed\2d_data.npz")  # Windowing 완료된 데이터
     model_save_dir = os.path.join(base_dir, "models")
     os.makedirs(model_save_dir, exist_ok=True)
@@ -114,7 +147,7 @@ def train_lstm_ae():
     print(f"Raw Data Shape: {windows.shape}")  # 예상: (N, 24, 13)
 
     # -----------------------------------------------------------
-    # [Step 2] 스케일링 (StandardScaler Fit & Transform) - 핵심 수정
+    # [Step 2] 스케일링 (StandardScaler Fit & Transform)
     # -----------------------------------------------------------
     print("[Preprocess] Fitting and Applying StandardScaler...")
 
@@ -158,7 +191,7 @@ def train_lstm_ae():
     model = LSTMAutoencoder(input_dim=input_dim, seq_len=seq_len, hidden_dim=256, latent_dim=64).to(device)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-    criterion = nn.MSELoss()
+    criterion = reconstruction_loss
 
     # 학습률 스케줄러 (Loss가 안 줄어들면 LR 감소)
     scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10, verbose=True)
@@ -235,7 +268,7 @@ def train_lstm_ae():
     plt.plot(train_losses, label="Train Loss")
     plt.plot(val_losses, label="Val Loss")
     plt.xlabel("Epoch")
-    plt.ylabel("MSE Loss (Standardized)")
+    plt.ylabel("Loss (Time-weighted + Velocity)")
     plt.title("Training Loss Curve")
     plt.grid(True)
     plt.legend()
@@ -294,6 +327,7 @@ def train_lstm_ae():
     plt.tight_layout()
     plt.suptitle(f"Reconstruction Check (Sample {sample_idx})", fontsize=16, y=1.02)
     plt.show()
+
 
 if __name__ == "__main__":
     train_lstm_ae()
