@@ -20,9 +20,13 @@ def load_general_ae():
     return model
 
 
-def cal_gen_error():
+def cal_gen_error(file_id="v_1", user_model_path=None):
+    # 개인화 모델 경로: 인자가 없으면 기존 고정 경로로 폴백
+    if user_model_path is None:
+        user_model_path = os.path.join(config.FINE_TUNE_DIR, "user_specific_ae.pth")
 
-    npz = np.load(os.path.join(config.VAL_PROCESSED_DIR, "2d_data.npz"))
+    # 업로드된 영상(file_id)의 windows로 일반 오차 계산 (기존 고정 2d_data.npz 버그 수정)
+    npz = np.load(os.path.join(config.VAL_PROCESSED_DIR, f"{file_id}_processed.npz"))
     windows = npz["windows"]
     num_windows = windows.shape[0]
 
@@ -52,10 +56,7 @@ def cal_gen_error():
     # 기존 기능: latent shift
     # ------------------------
     user_model = LSTMAutoencoder(input_dim=13, hidden_dim=256, latent_dim=64)
-    user_model.load_state_dict(torch.load(
-        os.path.join(config.FINE_TUNE_DIR, "user_specific_ae.pth"),
-        map_location="cpu"
-    ))
+    user_model.load_state_dict(torch.load(user_model_path, map_location="cpu"))
     user_model.eval()
 
     with torch.no_grad():

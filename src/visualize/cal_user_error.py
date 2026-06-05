@@ -10,7 +10,10 @@ WINDOW_SIZE = 32
 WINDOW_STRIDE = 2
 
 
-def cal_user_error(file_id="v_1"):
+def cal_user_error(file_id="v_1", user_model_path=None):
+    # 개인화 모델 경로: 인자가 없으면 기존 고정 경로로 폴백
+    if user_model_path is None:
+        user_model_path = os.path.join(config.FINE_TUNE_DIR, "user_specific_ae.pth")
 
     npz = np.load(os.path.join(config.VAL_PROCESSED_DIR, f"{file_id}_processed.npz"))
     windows = npz["windows"]
@@ -24,10 +27,7 @@ def cal_user_error(file_id="v_1"):
     X = PitchWindowDataset(win_scaled).x
 
     model = LSTMAutoencoder(13, 256, 64)
-    model.load_state_dict(torch.load(
-        os.path.join(config.FINE_TUNE_DIR, "user_specific_ae.pth"),
-        map_location="cpu"
-    ))
+    model.load_state_dict(torch.load(user_model_path, map_location="cpu"))
     model.eval()
 
     # ------------------------

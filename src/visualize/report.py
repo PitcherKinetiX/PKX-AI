@@ -46,12 +46,18 @@ def assign_grade(score):
 # ============================================================
 # REPORT MAIN
 # ============================================================
-def generate_report(file_id="v_1"):
+def generate_report(file_id="v_1", user_model_path=None, user_stats_path=None):
+
+    # 개인화 모델/통계 경로: 인자가 없으면 기존 고정 경로로 폴백
+    if user_model_path is None:
+        user_model_path = os.path.join(config.FINE_TUNE_DIR, "user_specific_ae.pth")
+    if user_stats_path is None:
+        user_stats_path = os.path.join(config.FINE_TUNE_DIR, "user_stats.pkl")
 
     # --------------------------------------------------------
     # Load user baseline stats (mean, std)
     # --------------------------------------------------------
-    stats = joblib.load(os.path.join(config.FINE_TUNE_DIR, "user_stats.pkl"))
+    stats = joblib.load(user_stats_path)
     mean_raw = stats["mean"]
     std_raw = stats["std"]
 
@@ -69,7 +75,7 @@ def generate_report(file_id="v_1"):
     # --------------------------------------------------------
     # 1) USER ERROR ANALYSIS
     # --------------------------------------------------------
-    user_res = cal_user_error(file_id)
+    user_res = cal_user_error(file_id, user_model_path)
     feat_err = user_res["feature_error"]
     crit_w = user_res["critical_window"]
     crit_feat = user_res["critical_feature"]
@@ -86,7 +92,7 @@ def generate_report(file_id="v_1"):
     # --------------------------------------------------------
     # 2) GENERAL MODEL ANALYSIS
     # --------------------------------------------------------
-    gen_res = cal_gen_error()
+    gen_res = cal_gen_error(file_id, user_model_path)
     gen_feat_err = gen_res["feature_error"]
     gen_worst_feat = gen_res["worst_feature_idx"]
     latent_shift = gen_res["latent_shift_norm"]
@@ -183,12 +189,18 @@ def generate_report(file_id="v_1"):
 # ============================================================
 # REPORT JSON (구조화된 dict 반환)
 # ============================================================
-def generate_report_json(file_id="v_1") -> dict:
+def generate_report_json(file_id="v_1", user_model_path=None, user_stats_path=None) -> dict:
+
+    # 개인화 모델/통계 경로: 인자가 없으면 기존 고정 경로로 폴백
+    if user_model_path is None:
+        user_model_path = os.path.join(config.FINE_TUNE_DIR, "user_specific_ae.pth")
+    if user_stats_path is None:
+        user_stats_path = os.path.join(config.FINE_TUNE_DIR, "user_stats.pkl")
 
     # --------------------------------------------------------
     # Load user baseline stats (mean, std)
     # --------------------------------------------------------
-    stats = joblib.load(os.path.join(config.FINE_TUNE_DIR, "user_stats.pkl"))
+    stats = joblib.load(user_stats_path)
     mean_raw = stats["mean"]
     std_raw = stats["std"]
 
@@ -205,7 +217,7 @@ def generate_report_json(file_id="v_1") -> dict:
     # --------------------------------------------------------
     # 1) USER ERROR ANALYSIS
     # --------------------------------------------------------
-    user_res = cal_user_error(file_id)
+    user_res = cal_user_error(file_id, user_model_path)
     feat_err = user_res["feature_error"]
     crit_w = user_res["critical_window"]
     crit_feat = user_res["critical_feature"]
@@ -221,7 +233,7 @@ def generate_report_json(file_id="v_1") -> dict:
     # --------------------------------------------------------
     # 2) GENERAL MODEL ANALYSIS
     # --------------------------------------------------------
-    gen_res = cal_gen_error()
+    gen_res = cal_gen_error(file_id, user_model_path)
     gen_feat_err = gen_res["feature_error"]
     gen_worst_feat = gen_res["worst_feature_idx"]
     latent_shift = gen_res["latent_shift_norm"]
