@@ -20,16 +20,17 @@ FEATURE_LABELS = [
 VEL_LABELS = FEATURE_LABELS[8:]
 
 
-# 특징별 정상 기준선(baseline = 학습 시 그 특징의 평균 재구성오차) 대비 비율로 레벨 분류.
-# (특징마다 본질적 오차 스케일이 달라, 전역 mean+k*std 절대 기준은 거의 다 '위험'으로 쏠렸음)
-LEVEL_NORMAL_RATIO = 1.5    # baseline의 1.5배 미만 → 정상
-LEVEL_GOOD_RATIO = 2.5      # 2.5배 미만 → 양호
-LEVEL_CAUTION_RATIO = 4.0   # 4배 미만 → 주의, 이상 → 위험
+# 점수/레벨 기준을 "같은 영상에 대한 일반(general) 모델의 재구성오차"로 잡는다.
+# 학습오차(stats.mean)는 모델이 과적합해 매우 작아지므로(일반화 갭), 새 영상은 항상 몇 배 크게 보여
+# 일관성 점수가 비정상적으로 낮고 모든 항목이 '위험'으로 쏠렸다. 일반모델 오차는 고정·안정적인 기준.
+LEVEL_NORMAL_RATIO = 0.95   # user < 0.95*general → 정상 (개인화 모델이 일반모델보다 더 잘 재구성)
+LEVEL_GOOD_RATIO = 1.10     # < 1.10x → 양호
+LEVEL_CAUTION_RATIO = 1.35  # < 1.35x → 주의, 이상 → 위험
+CONSISTENCY_PENALTY = 0.5   # 일관성 점수: user==general → 50점, user가 general의 절반이면 75점
 
 
-def classify_error_level(value, baseline):
-    mu = max(float(baseline), 1e-6)
-    r = float(value) / mu
+def classify_error_level(user_err, gen_err):
+    r = float(user_err) / (float(gen_err) + 1e-6)
     if r < LEVEL_NORMAL_RATIO:
         return "정상"
     elif r < LEVEL_GOOD_RATIO:
@@ -63,26 +64,11 @@ def generate_report(file_id="v_1", user_model_path=None, user_stats_path=None):
     if user_stats_path is None:
         user_stats_path = os.path.join(config.FINE_TUNE_DIR, "user_stats.pkl")
 
-    # --------------------------------------------------------
-    # Load user baseline stats (mean, std)
-    # --------------------------------------------------------
+    # 통계는 하위호환용으로만 로드 (점수 산정엔 사용하지 않음 — 일반모델 오차 기준으로 대체)
     stats = joblib.load(user_stats_path)
-    mean_raw = stats["mean"]
-    std_raw = stats["std"]
-
-    # numpy array인지 확인
-    if np.isscalar(mean_raw):
-        mean = np.ones(13) * float(mean_raw)
-    else:
-        mean = np.array(mean_raw)
-
-    if np.isscalar(std_raw):
-        std = np.ones(13) * (float(std_raw) + 1e-6)
-    else:
-        std = np.array(std_raw) + 1e-6
 
     # --------------------------------------------------------
-    # 1) USER ERROR ANALYSIS
+    # 1) USER ERROR ANALYSIS (+ 비교 기준이 되는 GENERAL 오차 먼저 계산)
     # --------------------------------------------------------
     user_res = cal_user_error(file_id, user_model_path)
     feat_err = user_res["feature_error"]
@@ -90,29 +76,26 @@ def generate_report(file_id="v_1", user_model_path=None, user_stats_path=None):
     crit_feat = user_res["critical_feature"]
     crit_top3 = user_res["critical_top3_features"]
 
-    feat_levels = [
-        classify_error_level(feat_err[i], feat_baseline[i])
-        for i in range(13)
-    ]
-
-    # User Consistency Score
-    # 투구 일관성: 절대 MSE가 아니라 "본인 학습 시 평균 재구성오차(mu) 대비 비율"로 평가한다.
-    # (AE 절대 오차가 1을 넘을 수 있어 기존 100*(1-MSE)는 항상 0으로 눌렸음)
-    # 오차가 평소(mu)와 같으면 100점, 2배면 50점, 3배면 25점 — 배가마다 절반.
-    _err = float(feat_err.mean())
-    _mu = max(float(np.mean(np.asarray(mean_raw, dtype=float))), 1e-6)
-    UserScore = float(np.clip(100.0 * (0.5 ** (_err / _mu - 1.0)), 0, 100))
-
-    # --------------------------------------------------------
-    # 2) GENERAL MODEL ANALYSIS
-    # --------------------------------------------------------
     gen_res = cal_gen_error(file_id, user_model_path)
-    gen_feat_err = gen_res["feature_error"]
+    gen_feat_err = np.asarray(gen_res["feature_error"], dtype=float)
     gen_worst_feat = gen_res["worst_feature_idx"]
     latent_shift = gen_res["latent_shift_norm"]
 
-    GeneralScore = float(100 * np.exp(-latent_shift))
-    GeneralScore = np.clip(GeneralScore, 0, 100)
+    # 특징 레벨: 개인화 모델 오차를 같은 영상의 일반모델 오차와 비교
+    feat_levels = [
+        classify_error_level(feat_err[i], gen_feat_err[i])
+        for i in range(13)
+    ]
+
+    # 투구 일관성: 개인화 모델이 일반모델 대비 얼마나 잘 재구성하는지 (학습오차 과적합 영향 없음)
+    UserScore = float(np.clip(
+        100.0 * (1.0 - CONSISTENCY_PENALTY * float(feat_err.mean()) / (float(gen_feat_err.mean()) + 1e-6)),
+        0, 100))
+
+    # --------------------------------------------------------
+    # 2) GENERAL MODEL SCORE
+    # --------------------------------------------------------
+    GeneralScore = float(np.clip(100 * np.exp(-latent_shift), 0, 100))
 
     # --------------------------------------------------------
     # 3) MEDICAL ANALYSIS
@@ -211,25 +194,13 @@ def generate_report_json(file_id="v_1", user_model_path=None, user_stats_path=No
     if user_stats_path is None:
         user_stats_path = os.path.join(config.FINE_TUNE_DIR, "user_stats.pkl")
 
-    # --------------------------------------------------------
-    # Load user baseline stats (mean, std)
-    # --------------------------------------------------------
+    # 통계는 진단/하위호환용으로만 로드 (점수 산정엔 사용하지 않음 — 일반모델 오차 기준으로 대체)
     stats = joblib.load(user_stats_path)
-    mean_raw = stats["mean"]
-    std_raw = stats["std"]
-
-    # 특징별 정상 기준선: 학습 시 저장된 per-feature 평균오차(feat_mean)가 있으면 사용(권장),
-    # 없으면(구버전 모델) 전역 평균오차로 폴백.
-    _overall_mu = max(float(np.mean(np.asarray(mean_raw, dtype=float))), 1e-6)
-    _feat_mean = stats.get("feat_mean")
-    if _feat_mean is not None:
-        # 기준선이 너무 작은 특징이 과민하게 '위험'으로 분류되지 않도록 전역 평균의 30%로 하한.
-        feat_baseline = np.maximum(np.asarray(_feat_mean, dtype=float), 0.3 * _overall_mu)
-    else:
-        feat_baseline = np.ones(13) * _overall_mu
+    mean_raw = stats.get("mean")
+    std_raw = stats.get("std")
 
     # --------------------------------------------------------
-    # 1) USER ERROR ANALYSIS
+    # 1) USER ERROR ANALYSIS (+ 비교 기준이 되는 GENERAL 오차 먼저 계산)
     # --------------------------------------------------------
     user_res = cal_user_error(file_id, user_model_path)
     feat_err = user_res["feature_error"]
@@ -237,26 +208,25 @@ def generate_report_json(file_id="v_1", user_model_path=None, user_stats_path=No
     crit_feat = user_res["critical_feature"]
     crit_top3 = user_res["critical_top3_features"]
 
-    feat_levels = [
-        classify_error_level(feat_err[i], feat_baseline[i])
-        for i in range(13)
-    ]
-
-    # 투구 일관성: 절대 MSE가 아니라 "본인 학습 시 평균 재구성오차(mu) 대비 비율"로 평가한다.
-    # (AE 절대 오차가 1을 넘을 수 있어 기존 100*(1-MSE)는 항상 0으로 눌렸음)
-    # 오차가 평소(mu)와 같으면 100점, 2배면 50점, 3배면 25점 — 배가마다 절반.
-    _err = float(feat_err.mean())
-    _mu = max(float(np.mean(np.asarray(mean_raw, dtype=float))), 1e-6)
-    UserScore = float(np.clip(100.0 * (0.5 ** (_err / _mu - 1.0)), 0, 100))
-
-    # --------------------------------------------------------
-    # 2) GENERAL MODEL ANALYSIS
-    # --------------------------------------------------------
     gen_res = cal_gen_error(file_id, user_model_path)
-    gen_feat_err = gen_res["feature_error"]
+    gen_feat_err = np.asarray(gen_res["feature_error"], dtype=float)
     gen_worst_feat = gen_res["worst_feature_idx"]
     latent_shift = gen_res["latent_shift_norm"]
 
+    # 특징 레벨: 개인화 모델 오차를 같은 영상의 일반모델 오차와 비교
+    feat_levels = [
+        classify_error_level(feat_err[i], gen_feat_err[i])
+        for i in range(13)
+    ]
+
+    # 투구 일관성: 개인화 모델이 일반모델 대비 얼마나 잘 재구성하는지 (학습오차 과적합 영향 없음)
+    UserScore = float(np.clip(
+        100.0 * (1.0 - CONSISTENCY_PENALTY * float(feat_err.mean()) / (float(gen_feat_err.mean()) + 1e-6)),
+        0, 100))
+
+    # --------------------------------------------------------
+    # 2) GENERAL MODEL SCORE
+    # --------------------------------------------------------
     GeneralScore = float(np.clip(100 * np.exp(-latent_shift), 0, 100))
 
     # ===== [DIAG] 투구 일관성(UserScore) 원인 진단 로그 — 원인 확정 후 제거 =====
