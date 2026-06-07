@@ -24,6 +24,9 @@ def cal_user_error(file_id="v_1", user_model_path=None):
     scaler = joblib.load(config.SCALER_DIR)
     win_scaled = scaler.transform(windows.reshape(-1, 13)).reshape(num_windows, WINDOW_SIZE, 13)
 
+    # fine-tune 학습과 동일하게 Clipping (학습-추론 분포 일치 → 이상치로 인한 재구성 오차 폭주 방지)
+    win_scaled = np.clip(win_scaled, -5, 5)
+
     X = PitchWindowDataset(win_scaled).x
 
     model = LSTMAutoencoder(13, 256, 64)

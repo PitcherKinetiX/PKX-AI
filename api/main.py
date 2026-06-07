@@ -12,10 +12,15 @@ import logging
 import traceback
 import uuid
 import threading
+import socket
 import urllib.request
 from urllib.parse import urlparse, unquote
 from concurrent.futures import ThreadPoolExecutor
 import numpy as np
+
+# urllib/torch.hub 등 블로킹 소켓에 stall 타임아웃 적용 (네트워크 정지 시 잡이 무한 대기하지 않고 예외 → FAILED 처리)
+# uvicorn(asyncio)은 논블로킹 소켓을 쓰므로 영향 없음.
+socket.setdefaulttimeout(300)
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
