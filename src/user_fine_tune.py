@@ -70,7 +70,9 @@ def fine_tune(windows, base_model_path, device=None, epochs=50, lr=1e-4):
     with torch.no_grad():
         tensor = torch.tensor(windows_scaled, dtype=torch.float32).to(device)
         recon = model(tensor)
-        loss_per_sample = torch.mean((tensor - recon) ** 2, dim=[1, 2]).cpu().numpy()
+        se = (tensor - recon) ** 2                                   # (N, T, F)
+        loss_per_sample = torch.mean(se, dim=[1, 2]).cpu().numpy()   # (N,) 윈도우별 평균오차
+        feat_per_sample = torch.mean(se, dim=1).cpu().numpy()        # (N, F) 윈도우별·특징별 평균오차
 
     mean_error = float(np.mean(loss_per_sample))
     std_error = float(np.std(loss_per_sample))
@@ -78,6 +80,9 @@ def fine_tune(windows, base_model_path, device=None, epochs=50, lr=1e-4):
         "mean": mean_error,
         "std": std_error,
         "threshold": mean_error + 2.0 * std_error,  # 2 Sigma (95%)
+        # 특징별 정상 기준선(리포트 레벨 분류용) — 특징마다 오차 스케일이 달라 per-feature로 저장
+        "feat_mean": np.mean(feat_per_sample, axis=0).astype(float).tolist(),  # (F,)
+        "feat_std": np.std(feat_per_sample, axis=0).astype(float).tolist(),    # (F,)
     }
 
     # CPU state_dict 로 반환 (CUDA 환경 의존 제거)
