@@ -122,7 +122,9 @@ def generate_report(file_id="v_1", user_model_path=None, user_stats_path=None):
     score_t = max(0, score_t)
 
     # 최종 medical score
-    MedicalScore = float(0.6 * score_v.mean() + 0.4 * score_t)
+    # 최악 부위에 민감하도록 평균과 최솟값을 절반씩 반영 (위험 부위 1개라도 있으면 점수가 충분히 내려감)
+    score_v_component = 0.5 * float(score_v.mean()) + 0.5 * float(score_v.min())
+    MedicalScore = float(0.6 * score_v_component + 0.4 * score_t)
 
     most_critical_med_feature = med_res["critical_med_name"]
 
@@ -274,7 +276,9 @@ def generate_report_json(file_id="v_1", user_model_path=None, user_stats_path=No
             score_t -= 20
     score_t = max(0, score_t)
 
-    MedicalScore = float(0.6 * score_v.mean() + 0.4 * score_t)
+    # 최악 부위에 민감하도록 평균과 최솟값을 절반씩 반영 (위험 부위 1개라도 있으면 점수가 충분히 내려감)
+    score_v_component = 0.5 * float(score_v.mean()) + 0.5 * float(score_v.min())
+    MedicalScore = float(0.6 * score_v_component + 0.4 * score_t)
 
     # --------------------------------------------------------
     # 4) FINAL SCORE

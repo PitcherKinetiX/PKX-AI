@@ -66,12 +66,12 @@ def cal_med_error(file_id="v_1"):
     # ----------------------
     medical_scores = []
     for ratio in danger_ratios:
-        if ratio < 1:
-            medical_scores.append(100)
-        elif ratio < 2:
-            medical_scores.append(60)
+        if ratio < 0.8:
+            medical_scores.append(100)   # 안전
+        elif ratio < 1.0:
+            medical_scores.append(60)    # 주의 (위험 임계값 근접)
         else:
-            medical_scores.append(20)
+            medical_scores.append(20)    # 위험 (위험 임계값 초과)
 
     medical_overall_score = float(np.mean(medical_scores))
 
